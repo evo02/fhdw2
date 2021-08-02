@@ -117,7 +117,7 @@ cpdef double det_m1(int pm, int lda, double[:, :] a, int r, int c) nogil:
     alpha *= ( s/a[c, r] )
     return alpha
 
-cdef void inv_m1(int pm, int lda, double[:, :] a, int r, int c) nogil:
+cpdef void inv_m1(int pm, int lda, double[:, :] a, int r, int c) nogil:
     """
     Inv: drop r-th row and c-th column
 
@@ -178,25 +178,31 @@ cdef void inv_m1(int pm, int lda, double[:, :] a, int r, int c) nogil:
     
     
 
-# cdef double[:, :] det_r(int pm, int lda, double[:, :] a, int r, double[:] v) nogil:
-#     """
-#     Det: change a single row
+cpdef double det_r(int pm, int lda, double[:, :] a, int r, double[:] v) nogil:
+    """
+    Det: change a single row
     
-# 	integer :: lda, pm       ! leading dimension and actual size of A
-# 	double  :: a(lda,lda), v(lda)
-#     integer :: r
+	integer :: lda, pm       ! leading dimension and actual size of A
+	double  :: a(lda,lda), v(lda)
+    integer :: r
     
-#     Input: 
-#         a(lda,lda) --- inverse matrix
-#         v(lda)     --- a row to be added
-#         r          --- a row number 
-#         all arrays are of the size pm<lda 
+    Input: 
+        a(lda,lda) --- inverse matrix
+        v(lda)     --- a row to be added
+        r          --- a row number 
+        all arrays are of the size pm<lda 
 
-#     Output:
-#         det. ratio @ det_r
-#     """
-#     #\lambda =  ( v DOT A_r )
-#     return 1.0 + ddot(pm,v,1,a(1,r),1)
+    Output:
+        det. ratio @ det_r
+    """
+    #\lambda =  ( v DOT A_r )
+    cdef:
+        double alpha  = 1.0
+        int incx = 1
+        int incy = 1
+        double *r0 = &a[0, r-1]
+    #cdef d ddot(int *n, d *dx, int *incx, d *dy, int *incy) nogil:
+    return alpha + ddot(&pm, &v[0], &incx, r0, &incy)
 
 # cdef void inv_r(int pm, int lda, double[:,:] a, int r, double det, double[:] v, double[:] w, double[:] z) nogil:
 #     """
