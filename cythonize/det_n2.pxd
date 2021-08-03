@@ -1,15 +1,17 @@
-# cpdef double[:] det_p1(int pm, int lda, double[:, :] a, double[:] u, double[:] v, double[:] z, double s) nogil
+#cython: language_level=3, boundscheck=True
 
-# cdef void inv_p1(int pm, int lda, double[:, :] a, double det, double[:] v, double[:] w, double[:] z) nogil
+cpdef double det_p1(int pm, int lda, double[:, :] a, double[:] u, double[:] v, double[:] z, double s) nogil 
 
-# cdef double[:, :] det_m1(int pm, int lda, double[:, :] a, int r, int c) nogil
+cpdef void inv_p1(int pm, int lda, double[:, :] a, double det, double[:] v, double[:] w, double[:] z) nogil
 
-# cdef void inv_m1(int pm, int lda, double[:, :] a, int r, int c) nogil
+cpdef double det_m1(int pm, int lda, double[:, :] a, int r, int c) nogil
 
-# cdef double[:, :] det_r(int pm, int lda, double[:, :] a, int r, double[:] v) nogil
+cpdef void inv_m1(int pm, int lda, double[:, :] a, int r, int c) nogil
 
-# cdef void inv_r(int pm, int lda, double[:,:] a, int r, double det, double[:] v, double[:] w, double[:] z) nogil
+cpdef double det_r(int pm, int lda, double[:, :] a, int r, double[:] v) nogil
 
-# cdef double full_inv(int pm, int lda, double[:, :] a) nogil
+cpdef void inv_r(int pm, int lda, double[:,:] a, int r, double det, double[:] v, double[:] w, double[:] z) nogil
 
-# cdef double det_p2(int pm, int lda, double[:, :] a, double[:, :] u2, double[:, :] v2, double[:, :] s2, double[:, :] c2) nogil
+cpdef double full_inv(int pm, int lda, double[:, :] a) nogil
+
+cpdef double det_p2(int pm, int lda, double[:, :] a, double[:, :] u, double[:, :] v, double[:, :] s, double[:, :] c) nogil

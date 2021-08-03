@@ -2,6 +2,7 @@
 #cython: language_level=3, boundscheck=True
 
 from scipy.linalg.cython_blas cimport dgemv, ddot, dger, dscal, daxpy, dswap, dcopy, dgemm
+from scipy.linalg.cython_lapack cimport dgetrf, dgetri
 
 import numpy as np
 cimport numpy as np
@@ -141,7 +142,7 @@ cpdef void inv_m1(int pm, int lda, double[:, :] a, int r, int c) nogil:
         a(pm,1:pm)       is  -\rho * w  -- last row
         a(1:pm-1,1:pm-1) is  a^{-1} + \rho z*w 
     """
-    
+
     cdef:
         int incx = 1
         int incy = 1
@@ -175,9 +176,6 @@ cpdef void inv_m1(int pm, int lda, double[:, :] a, int r, int c) nogil:
     #cdef void dger(int *m, int *n, d *alpha, d *x, int *incx, d *y, int *incy, d *a, int *lda) nogil:
     dger(&pm, &pm, &rh, &a[0, pm], &incx, &a[pm,0], &lda, a_full, &lda)
 
-    
-    
-
 cpdef double det_r(int pm, int lda, double[:, :] a, int r, double[:] v) nogil:
     """
     Det: change a single row
@@ -204,103 +202,129 @@ cpdef double det_r(int pm, int lda, double[:, :] a, int r, double[:] v) nogil:
     #cdef d ddot(int *n, d *dx, int *incx, d *dy, int *incy) nogil:
     return alpha + ddot(&pm, &v[0], &incx, r0, &incy)
 
-# cdef void inv_r(int pm, int lda, double[:,:] a, int r, double det, double[:] v, double[:] w, double[:] z) nogil:
-#     """
-#     inv: change a single row
+cpdef void inv_r(int pm, int lda, double[:,:] a, int r, double det, double[:] v, double[:] w, double[:] z) nogil:
+    """
+    inv: change a single row
 
-#     integer :: lda, pm       ! leading dimension and actual size of A
-# 	double  :: a(lda,lda), v(lda),w(lda),z(lda),det
-#     integer :: r
-#     double  :: rho
+    integer :: lda, pm       ! leading dimension and actual size of A
+	double  :: a(lda,lda), v(lda),w(lda),z(lda),det
+    integer :: r
+    double  :: rho
 
-#     Input: 
-#         a(lda,lda)      --- inverse matrix
-#         v(lda)          --- a row to be added
-#         w(lda),z(lda)   --- working arrays
-#         r               --- row number 
-#         det             --- det ratio, as set by det_r
-#             all arrays are of the size pm<lda 
+    Input: 
+        a(lda,lda)      --- inverse matrix
+        v(lda)          --- a row to be added
+        w(lda),z(lda)   --- working arrays
+        r               --- row number 
+        det             --- det ratio, as set by det_r
+            all arrays are of the size pm<lda 
 
-#     Output:
-#         a(lda,lda) contains an updated inverse matrix
-#     """
-#     cdef double rho = -1.d0/det
-#     #z_i = A_{i,r}
-#     dcopy(pm,a(1,r),1,z,1)
+    Output:
+        a(lda,lda) contains an updated inverse matrix
+    """
+    cdef:
+        double rho = -1.0/det
+        int incx = 1
+        int incy = 1
+        double alpha = 1.0
+        double beta = 0.0
+        double *a0 = &a[0,0]
+        double *a_r = &a[0, r-1]
 
-#     #w = v DOT A 
-#     dgemv('T',pm,pm,1.d0,a,lda,v,1,0.d0,w,1)
+    #z_i = A_{i,r}
+    #cdef void dcopy(int *n, d *dx, int *incx, d *dy, int *incy) nogil:
+    dcopy(&pm, a_r, &incx, &z[0], &incy)
 
-#     #A+ \rho* z DOT w^T
-#     dger(pm,pm,rho,z,1,w,1,a,lda)
+    #w = v DOT A 
+    #cdef void dgemv(char *trans, int *m, int *n, d *alpha, d *a, int *lda, d *x, int *incx, d *beta, d *y, int *incy) nogil:
+    dgemv('T', &pm, &pm, &alpha, a0, &lda, &v[0], &incx, &beta, &w[0], &incy)
 
-#     # one cannot get rid of z() array since if one otherwise plugs {a(1,r),1}
-#     # directly into dger(...) instead of {z,1}, it all goes nuts.
-#     # probably, dger() spoils the z array via blocking or the like.
+    #A+ \rho* z DOT w^T
+    #cdef void dger(int *m, int *n, d *alpha, d *x, int *incx, d *y, int *incy, d *a, int *lda) nogil:
+    dger(&pm, &pm, &rho, &z[0], &incx, &w[0], &incy, a0, &lda)
 
-
-# cdef double full_inv(int pm, int lda, double[:, :] a) nogil:
-#     """
-#     inv & det of a matrix (honest N**3)
-
-#     integer :: lda, pm  ! leading dimension and actual size of A
-#     double  :: a(lda,lda)
-
-#     integer, allocatable :: ipiv(:)
-#     double, allocatable :: work(:)
-#     integer :: info, i,lwork,icnt
-
-#     Input: 
-#         A(lda,lda), pm<lda 
-
-#     Output: 
-#         A contains the inverse
-#         full_inv contains the determinant
-
-#     """
-#     cdef int lwork = lda
-#     cdef int[:] ipiv, work
-# 	allocate(ipiv(1:pm), work(1:lwork))
-
-# 	dgetrf(pm,pm,a,lda,ipiv, info) 
-
-#     full_inv = 1d0
-#         icnt=0
-#         do i=1,pm
-#         full_inv = full_inv * a(i,i)
-#            if (ipiv(i).ne.i) then
-#              icnt = icnt+1
-#            endif
-#         enddo
-#         if (mod(icnt,2).eq.1) full_inv = -full_inv
+    # one cannot get rid of z() array since if one otherwise plugs {a(1,r),1}
+    # directly into dger(...) instead of {z,1}, it all goes nuts.
+    # probably, dger() spoils the z array via blocking or the like.
 
 
+cpdef double full_inv(int pm, int lda, double[:, :] a) nogil:
+    """
+    inv & det of a matrix (honest N**3)
 
-# 	dgetri(pm,a,lda,ipiv,work,lwork,info )
-# 	if(info/=0) print*,'dgetri info = ',info
-# 	deallocate( work,ipiv )
-#     return -1 #!!
+    integer :: lda, pm  ! leading dimension and actual size of A
+    double  :: a(lda,lda)
 
-# cdef double det_p2(int pm, int lda, double[:, :] a, double[:, :] u2, double[:, :] v2, double[:, :] s2, double[:, :] c2) nogil:
-# """
-#     Det: add a two rows & columns
+    integer, allocatable :: ipiv(:)
+    double, allocatable :: work(:)
+    integer :: info, i,lwork,icnt
 
-#     integer :: lda, pm       ! leading dimension and actual size of A
-#     real*8  :: a(lda,lda)
-#     real*8  :: v2(2,lda),u2(lda,2),s2(2,2),c2(lda,2)
+    Input: 
+        A(lda,lda), pm<lda 
 
-#     Input: 
-#         a(lda,lda), v2(2,lda), u2(lda,2), s2(2,2)
-#         all arrays are of the size pm<lda 
+    Output: 
+        A contains the inverse
+        full_inv contains the determinant
 
-#     Output:    
-#         det. ratio @ det_p2
-# """
-#     #c2=a^{-1} DOT u2
-#     dgemm('N','N',pm,2,pm,1.d0,a,lda,u2,lda,0.d0,c2,lda)
+    """
+    cdef:
+        int info
+        int lwork = lda
+        #pm lenght
+        int[:] ipiv
+        #lwork lengt
+        double[:] work
+        double *a0 = &a[0,0]
 
-#     #\Rho = s2 - v2 DOT c2
-#     dgemm('N','N',2,2,pm,-1.d0,v2,2,c2,lda,1.d0,s2,2)
+	#allocate(ipiv(1:pm), work(1:lwork))
+    dgetrf(&pm, &pm, a0, &lda, &ipiv[0], &info) 
 
-#     #det = det \Rho [which is 2*2]
-#     return s2(1,1)*s2(2,2) - s2(1,2)*s2(2,1)
+    cdef:
+        double res = 1.0
+        int icnt = 0
+    for i in range(pm):
+        res *= a[i,i]
+        if ipiv[i] != i:
+            icnt+=1
+        if icnt%2 == 1:
+            res = -res
+    dgetri(&pm, a0, &lda, &ipiv[0], &work[0], &lwork, &info)
+    if info != 0:
+        return -1
+
+    return res
+
+cpdef double det_p2(int pm, int lda, double[:, :] a, double[:, :] u, double[:, :] v, double[:, :] s, double[:, :] c) nogil:
+    """
+    Det: add a two rows & columns
+
+    integer :: lda, pm       ! leading dimension and actual size of A
+    real*8  :: a(lda,lda)
+    real*8  :: v2(2,lda),u2(lda,2),s2(2,2),c2(lda,2)
+
+    Input: 
+        a(lda,lda), v2(2,lda), u2(lda,2), s2(2,2)
+        all arrays are of the size pm<lda 
+
+    Output:    
+        det. ratio @ det_p2
+    """
+    cdef:
+        int n = 2
+        double alpha = 1.0
+        double beta = 0.0
+        double zalpha = -1.0
+        double *a0 = &a[0, 0]
+        double *u0 = &u[0, 0]
+        double *v0 = &v[0, 0]
+        double *s0 = &s[0, 0]
+        double *c0 = &c[0, 0]
+    #c2=a^{-1} DOT u2
+    #cdef void dgemm(char *transa, char *transb, int *m, int *n, int *k, d *alpha, d *a, int *lda, d *b, int *ldb, d *beta, d *c, int *ldc) nogil:
+    dgemm('N','N', &pm, &n, &pm, &alpha, a0, &lda, u0, &lda, &beta, c0, &lda)
+
+    #\Rho = s2 - v2 DOT c2
+    dgemm('N','N', &n, &n, &pm, &zalpha, v0, &n, c0, &lda, &alpha, s0, &n)
+
+    #det = det \Rho [which is 2*2]
+    return s[1,1]*s[2,2] - s[1,2]*s[2,1]
