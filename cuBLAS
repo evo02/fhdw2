@@ -1,0 +1,294 @@
+import pycuda.autoinit
+from pycuda import gpuarray
+import numpy as np
+from skcuda import cublas
+
+def det_p1(m, n, A, x, y, z, s):
+    alpha = 1.0
+    beta = 0.0
+    incx = 1
+    incy = 1
+    lda = m
+    y = np.zeros(m).astype('float32')
+
+    A_columnwise = A.T.copy()
+    A_gpu = gpuarray.to_gpu(A_columnwise)
+    x_gpu = gpuarray.to_gpu(x)
+    y_gpu = gpuarray.to_gpu(y)
+    z_gpu = gpuarray.to_gpu(z)
+    
+    trans  = cublas._CUBLAS_OP['N']
+    handle = cublas.cublasCreate()
+    cublas.cublasDgemv(handle, trans, m, n, alpha, A_gpu.gpudata, lda, 
+                        x_gpu.gpudata[0], incx, beta, y_gpu.gpudata[0], incy)
+    
+    s = s - cublas.cublasDdot(handle, trans, z_gpu.gpudata, incx, y_gpu.gpudata, incy)
+
+    cublas.cublasDestroy(handle)
+    return s
+
+
+def inv_p1(m, n, A, det, v, w, z):
+    rho = 1/det
+    alpha = 1
+    beta = 0
+    incx = 1
+    incy = 1
+    lda = m
+    y = np.zeros(m).astype('float32')
+    a0 = A[0, 0]
+
+
+    A_columnwise = A.T.copy()
+    A_gpu = gpuarray.to_gpu(A_columnwise)
+    v_gpu = gpuarray.to_gpu(v)
+    w_gpu = gpuarray.to_gpu(w)
+    z_gpu = gpuarray.to_gpu(z)
+    
+    trans  = cublas._CUBLAS_OP['T']
+    handle = cublas.cublasCreate()
+    cublas.cublasDgemv(handle, trans, m, m, alpha, A_gpu.gpudata, lda, 
+                        v_gpu.gpudata, incx, beta, w_gpu.gpudata, incy)
+    
+    cublas.cublasDger(handle, m, m, alpha, z_gpu.gpudata, incx, w_gpu.gpudata, incy, a0, lda)
+
+    a1 = A[0, m]
+    a2 = A[n, 0]
+    rho0 = -rho
+
+    #last row
+    #cdef void dscal(int *n, d *da, d *dx, int *incx) nogil:
+    cublas.cublasDscal(handle, trans, m, beta, a1, lda)
+
+    #cdef void daxpy(int *n, d *da, d *dx, int *incx, d *dy, int *incy) nogil:
+    cublas.cublasDaxpy(handle, trans, m, rho0, w_gpu.gpudata, incx, a1, lda)
+
+    #last column
+    cublas.cublasDscal(handle, trans, m, beta, a2, incx)
+    cublas.cublasDaxpy(handle, trans, m, rho0, z_gpu.gpudata, incx, a2, incy)
+
+    #(m+1,m+1)
+    A[m+1, m+1] = rho
+
+    #update m
+    m = m + 1
+    cublas.cublasDestroy(handle)
+
+def det_m1(pm, lda,a, r, c):
+    s = 1.0
+    alpha = 1.0
+    if c != pm: 
+        s = -s
+    
+    if r!=pm:
+        s = -s
+
+    alpha *= ( s/a[c, r] )
+    return alpha
+
+def inv_m1(pm, lda, a, r, c):
+    incx = 1
+    incy = 1
+    a0 = a[c-1, 0]
+    a1 = a[0, pm-1]
+    a2 = a[r-1, pm-1]
+    a3 = a[pm-1, 0]
+    a_full = a[0, 0]
+    trans  = cublas._CUBLAS_OP['N']
+    handle = cublas.cublasCreate()
+        #swap c-th and last row (c-th column of A <==> c-th row of A^{-1})
+    if c!=pm: 
+    #cdef void dswap(int *n, d *dx, int *incx, d *dy, int *incy) nogil:
+        cublas.cublasDswap(pm, a0, lda, a1, lda)
+
+        #swap r-th and last column
+    if r!=pm:
+    #cdef void dswap(int *n, d *dx, int *incx, d *dy, int *incy) nogil:
+        cublas.cublasDswap(pm, a2, incx, a3, incy)
+
+    #drop the last row & column
+    rh = -1.0/a[pm-1,pm-1]
+
+    #update pm
+    pm = pm - 1
+    #stripe out the outer product z*w
+    #cdef void dger(int *m, int *n, d *alpha, d *x, int *incx, d *y, int *incy, d *a, int *lda) nogil:
+    cublas.cublasDger(pm, pm, rh, a[0, pm], incx, a[pm,0], lda, a_full, lda)
+    cublas.cublasDestroy(handle)
+
+def det_r(pm, lda, a, r, v):
+    """
+    Det: change a single row
+    
+	integer :: lda, pm       ! leading dimension and actual size of A
+	double  :: a(lda,lda), v(lda)
+    integer :: r
+    
+    Input: 
+        a(lda,lda) --- inverse matrix
+        v(lda)     --- a row to be added
+        r          --- a row number 
+        all arrays are of the size pm<lda 
+
+    Output:
+        det. ratio @ det_r
+    """
+    #\lambda =  ( v DOT A_r )
+    alpha  = 1.0
+    incx = 1
+    incy = 1
+    r0 = a[0, r-1]
+    trans  = cublas._CUBLAS_OP['N']
+    handle = cublas.cublasCreate()
+    #cdef d ddot(int *n, d *dx, int *incx, d *dy, int *incy) nogil:
+    
+    alpha + cublas.cublasDdot(handle, pm, v[0], incx, r0, incy)
+
+    cublas.cublasDestroy(handle)
+    return alpha
+
+def inv_r(pm, lda, a, r, det, v, w, z):
+    """
+    inv: change a single row
+
+    integer :: lda, pm       ! leading dimension and actual size of A
+	double  :: a(lda,lda), v(lda),w(lda),z(lda),det
+    integer :: r
+    double  :: rho
+
+    Input: 
+        a(lda,lda)      --- inverse matrix
+        v(lda)          --- a row to be added
+        w(lda),z(lda)   --- working arrays
+        r               --- row number 
+        det             --- det ratio, as set by det_r
+            all arrays are of the size pm<lda 
+
+    Output:
+        a(lda,lda) contains an updated inverse matrix
+    """
+    rho = -1.0/det
+    incx = 1
+    incy = 1
+    alpha = 1.0
+    beta = 0.0
+    a0 = a[0,0]
+    a_r = a[0, r-1]
+
+    trans  = cublas._CUBLAS_OP['N']
+    handle = cublas.cublasCreate()
+
+    v_gpu = gpuarray.to_gpu(v)
+    w_gpu = gpuarray.to_gpu(w)
+    z_gpu = gpuarray.to_gpu(z)
+
+    #z_i = A_{i,r}
+    #cdef void dcopy(int *n, d *dx, int *incx, d *dy, int *incy) nogil:
+    cublas.cublasDcopy(handle, pm, a_r, incx, z_gpu.gpudata, incy)
+
+    #w = v DOT A 
+    #cdef void dgemv(char *trans, int *m, int *n, d *alpha, d *a, int *lda, d *x, int *incx, d *beta, d *y, int *incy) nogil:
+    cublas.cublasDgemv(handle, trans, pm, pm, alpha, a0, lda, v_gpu.gpudata, incx, beta, w_gpu.gpudata, incy)
+
+    #A+ \rho* z DOT w^T
+    #cdef void dger(int *m, int *n, d *alpha, d *x, int *incx, d *y, int *incy, d *a, int *lda) nogil:
+    cublas.cublasDger(handle, pm, pm, rho, z_gpu.gpudata, incx, w_gpu.gpudata, incy, a0, lda)
+
+    cublas.cublasDestroy(handle)
+    # one cannot get rid of z() array since if one otherwise plugs {a(1,r),1}
+    # directly into dger(...) instead of {z,1}, it all goes nuts.
+    # probably, dger() spoils the z array via blocking or the like.
+
+def full_inv(pm, lda, a):
+    """
+    inv & det of a matrix (honest N**3)
+
+    integer :: lda, pm  ! leading dimension and actual size of A
+    double  :: a(lda,lda)
+
+    integer, allocatable :: ipiv(:)
+    double, allocatable :: work(:)
+    integer :: info, i,lwork,icnt
+
+    Input: 
+        A(lda,lda), pm<lda 
+
+    Output: 
+        A contains the inverse
+        full_inv contains the determinant
+
+    """
+
+    lwork = lda
+    a0 = a[0,0]
+
+
+    trans  = cublas._CUBLAS_OP['N']
+    handle = cublas.cublasCreate()
+
+	#allocate(ipiv(1:pm), work(1:lwork))
+    cublas.cublasDgetrfBatched(handle, pm, a, lda, ipiv[0], info, 1) 
+
+    res = 1.0
+    icnt = 0
+    for i in range(pm):
+        res *= a[i,i]
+        if ipiv[i] != i:
+            icnt+=1
+        if icnt%2 == 1:
+            res = -res
+    cublas.cublasDgetriBatched(handle, pm, a, lda, ipiv[0], work[0], lwork, info, 1)
+    if info != 0:
+        return -1
+
+    cublas.cublasDestroy(handle)
+    
+    return res
+
+def det_p2(pm, lda, a, u, v, s, c):
+    """
+    Det: add a two rows & columns
+
+    integer :: lda, pm       ! leading dimension and actual size of A
+    real*8  :: a(lda,lda)
+    real*8  :: v2(2,lda),u2(lda,2),s2(2,2),c2(lda,2)
+
+    Input: 
+        a(lda,lda), v2(2,lda), u2(lda,2), s2(2,2)
+        all arrays are of the size pm<lda 
+
+    Output:    
+        det. ratio @ det_p2
+    """
+    n = 2
+    alpha = 1.0
+    beta = 0.0
+    zalpha = -1.0
+    a0 = a[0, 0]
+    u0 = u[0, 0]
+    v0 = v[0, 0]
+    s0 = s[0, 0]
+    c0 = c[0, 0]
+
+    trans  = cublas._CUBLAS_OP['N']
+    handle = cublas.cublasCreate()
+
+    A_columnwise = a.T.copy()
+    A_gpu = gpuarray.to_gpu(A_columnwise)
+    U_columnwise = u.T.copy()
+    U_gpu = gpuarray.to_gpu(U_columnwise)
+    C_columnwise = c.T.copy()
+    C_gpu = gpuarray.to_gpu(C_columnwise)
+    V_columnwise = v.T.copy()
+    V_gpu = gpuarray.to_gpu(V_columnwise)
+    S_columnwise = s.T.copy()
+    S_gpu = gpuarray.to_gpu(S_columnwise)
+    #c2=a^{-1} DOT u2
+    #cdef void dgemm(char *transa, char *transb, int *m, int *n, int *k, d *alpha, d *a, int *lda, d *b, int *ldb, d *beta, d *c, int *ldc) nogil:
+    cublas.cublasDgemm(handle, trans, trans, pm, n, pm, alpha, A_gpu, lda, U_gpu, lda, beta, C_gpu, lda)
+
+    #\Rho = s2 - v2 DOT c2
+    cublas.cublasDgemm(handle, trans, trans, n, n, pm, zalpha, V_gpu, n, C_gpu, lda, alpha, S_gpu, n)
+
+    #det = det \Rho [which is 2*2]
+    return s[1,1]*s[2,2] - s[1,2]*s[2,1]
